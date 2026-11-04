@@ -152,17 +152,26 @@ async function handleSnoozeAlarm() {
 }
 
 chrome.action.onClicked.addListener((tab) => {
-  if (typeof tab.id !== 'number') return;
-
-  chrome.sidePanel.setOptions({ tabId: tab.id, path: 'index.html', enabled: true }, () => {
-    if (chrome.runtime.lastError) {
-      console.error('Could not configure Jira Timekeeper for this tab:', chrome.runtime.lastError.message);
-      return;
-    }
-    chrome.sidePanel.open({ tabId: tab.id }, () => {
-      if (chrome.runtime.lastError) console.error('Could not open Jira Timekeeper for this tab:', chrome.runtime.lastError.message);
+  if (chrome.sidePanel) {
+    if (typeof tab.id !== 'number') return;
+    chrome.sidePanel.setOptions({ tabId: tab.id, path: 'index.html', enabled: true }, () => {
+      if (chrome.runtime.lastError) {
+        console.error('Could not configure Jira Timekeeper for this tab:', chrome.runtime.lastError.message);
+        return;
+      }
+      chrome.sidePanel.open({ tabId: tab.id }, () => {
+        if (chrome.runtime.lastError) console.error('Could not open Jira Timekeeper for this tab:', chrome.runtime.lastError.message);
+      });
     });
-  });
+    return;
+  }
+
+  if (globalThis.browser?.sidebarAction?.open) {
+    browser.sidebarAction.open().catch((error) => console.error('Could not open Jira Timekeeper sidebar:', error));
+    return;
+  }
+
+  chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {

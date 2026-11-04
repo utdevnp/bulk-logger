@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Jira Timekeeper",
+  "description": "Log your day across Jira issues in one focused workflow.",
+  "version": "0.1.0",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "jira-timekeeper@bulklogger.local",
+      "strict_min_version": "128.0"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Open Jira Timekeeper",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "sidebar_action": {
+    "default_title": "Jira Timekeeper",
+    "default_panel": "index.html",
+    "default_icon": "icons/icon32.png"
+  },
+  "background": {
+    "scripts": ["service-worker.js"]
+  },
+  "permissions": ["storage", "alarms"],
+  "optional_host_permissions": ["https://*/*"]
+}

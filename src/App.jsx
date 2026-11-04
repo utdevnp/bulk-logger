@@ -2,14 +2,15 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle, ArrowLeft, ArrowRight, Check, CheckCircle2, Clock3,
   ExternalLink, ListPlus, LoaderCircle, LockKeyhole, Plus, RefreshCw,
-  Settings2, ShieldCheck, Trash2, X,
+  Monitor, Moon, Settings2, ShieldCheck, Sun, Trash2, X,
 } from 'lucide-react';
 
 const STORE_KEY = 'jiraBulkLoggerState';
 const COMPLETION_KEY = 'jiraTimekeeperCompletedDay';
 const DEFAULT_CAP = 8;
 const DEFAULT_REMINDER_SETTINGS = { enabled: false, dailyTime: '16:00', snoozeMinutes: 15 };
-const DEFAULT_STATE = { credentials: null, cap: DEFAULT_CAP, drafts: {}, reminderSettings: DEFAULT_REMINDER_SETTINGS, day: todayKey() };
+const DESCRIPTION_FONT_SIZE_VERSION = 2;
+const DEFAULT_STATE = { credentials: null, cap: DEFAULT_CAP, drafts: {}, myOwnIssueKeys: [], showRecentTickets: true, theme: 'system', descriptionFontSize: 12, descriptionFontSizeVersion: DESCRIPTION_FONT_SIZE_VERSION, reminderSettings: DEFAULT_REMINDER_SETTINGS, day: todayKey() };
 
 function todayKey() {
   const now = new Date();
@@ -188,6 +189,7 @@ async function getTodaysWorklogs(credentials) {
   const start = zonedMidnight(today, timeZone);
   const end = zonedMidnight(today, timeZone) + 36 * 60 * 60 * 1000;
   const perIssueSeconds = {};
+  const perIssueWorklogs = {};
   let failedIssues = 0;
   await mapWithConcurrency(candidates, 5, async (issue) => {
     try {
@@ -202,7 +204,15 @@ async function getTodaysWorklogs(credentials) {
       const worklogs = page?.worklogs || [];
       for (const worklog of worklogs) {
         if (worklog.author?.accountId === profile.accountId && dateKeyInTimeZone(new Date(worklog.started), timeZone) === today) {
-          total += Number(worklog.timeSpentSeconds) || 0;
+          const seconds = Number(worklog.timeSpentSeconds) || 0;
+          total += seconds;
+          (perIssueWorklogs[issue.key] ||= []).push({
+            id: String(worklog.id),
+            started: worklog.started,
+            seconds,
+            minutes: Math.round(seconds / 60),
+            description: worklogCommentText(worklog.comment),
+          });
         }
       }
       startAt += worklogs.length;
@@ -217,7 +227,18 @@ async function getTodaysWorklogs(credentials) {
 
   const byIssue = Object.fromEntries(Object.entries(perIssueSeconds).map(([key, seconds]) => [key, Math.round(seconds / 60)]));
   const totalMinutes = Math.round(Object.values(perIssueSeconds).reduce((sum, seconds) => sum + seconds, 0) / 60);
-  return { day: today, totalMinutes, byIssue, failedIssues };
+  return { day: today, totalMinutes, byIssue, worklogsByIssue: perIssueWorklogs, failedIssues };
+}
+
+function worklogCommentText(comment) {
+  if (typeof comment === 'string') return comment;
+  const textFrom = (node) => {
+    if (!node) return '';
+    if (node.type === 'text') return node.text || '';
+    const children = (node.content || []).map(textFrom).join('');
+    return node.type === 'paragraph' || node.type === 'heading' ? `${children}\n` : children;
+  };
+  return textFrom(comment).trim();
 }
 
 async function getIssueDetails(credentials, keys) {
@@ -241,6 +262,23 @@ function includeIssuesAsDrafts(drafts, issues) {
       : { issue, entries: [{ id: crypto.randomUUID(), hours: '' }], description: '', submittedAt: null };
   });
   return nextDrafts;
+}
+
+function convertLegacyTimeDrafts(drafts, loggedByIssue = {}) {
+  return Object.fromEntries(Object.entries(drafts).map(([key, draft]) => {
+    if (draft.remainingHours !== undefined) {
+      return [key, { ...draft, ticketHours: undefined, autoHours: undefined }];
+    }
+    const legacyTotal = draft.ticketHours ?? draft.autoHours;
+    if (legacyTotal === undefined) return [key, draft];
+    const remaining = Math.max(0, parseMinutes(legacyTotal) - (loggedByIssue[key] || 0));
+    return [key, {
+      ...draft,
+      remainingHours: formatHours(remaining),
+      ticketHours: undefined,
+      autoHours: undefined,
+    }];
+  }));
 }
 
 function parseMinutes(value) {
@@ -289,7 +327,7 @@ function App() {
   const [completionDay, setCompletionDay] = useState(null);
   const [hydrated, setHydrated] = useState(false);
   const [issues, setIssues] = useState([]);
-  const [todayWorklogs, setTodayWorklogs] = useState({ day: todayKey(), totalMinutes: 0, byIssue: {} });
+  const [todayWorklogs, setTodayWorklogs] = useState({ day: todayKey(), totalMinutes: 0, byIssue: {}, worklogsByIssue: {} });
   const [worklogsLoaded, setWorklogsLoaded] = useState(false);
   const [worklogError, setWorklogError] = useState('');
   const [screen, setScreen] = useState('home');
@@ -309,16 +347,48 @@ function App() {
   }, [form.site, form.email, form.token]);
 
   useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const applyTheme = () => {
+      const theme = appState.theme || 'system';
+      document.documentElement.dataset.theme = theme === 'system'
+        ? (media.matches ? 'dark' : 'light')
+        : theme;
+    };
+    applyTheme();
+    if (appState.theme !== 'system') return undefined;
+    media.addEventListener('change', applyTheme);
+    return () => media.removeEventListener('change', applyTheme);
+  }, [appState.theme]);
+
+  useEffect(() => {
     Promise.all([readStorage(STORE_KEY), readStorage(COMPLETION_KEY)]).then(([saved, savedCompletionDay]) => {
       const next = {
         ...DEFAULT_STATE,
         ...(saved || {}),
         reminderSettings: { ...DEFAULT_REMINDER_SETTINGS, ...(saved?.reminderSettings || {}) },
       };
+      if (saved?.descriptionFontSizeVersion !== DESCRIPTION_FONT_SIZE_VERSION) {
+        next.descriptionFontSize = 12;
+        next.descriptionFontSizeVersion = DESCRIPTION_FONT_SIZE_VERSION;
+      }
       if (next.day !== todayKey()) {
+        const retainedOwnKeys = (next.myOwnIssueKeys || [])
+          .filter((key) => next.drafts?.[key]?.issue);
+        next.myOwnIssueKeys = retainedOwnKeys;
+        next.drafts = Object.fromEntries(retainedOwnKeys.map((key) => [key, {
+          ...next.drafts[key],
+          entries: [{ id: crypto.randomUUID(), hours: '' }],
+          description: '',
+          autoHours: undefined,
+          remainingHours: undefined,
+          ticketHours: undefined,
+          worklogEdits: {},
+          submittedAt: null,
+          submitError: '',
+        }]));
         next.day = todayKey();
-        next.drafts = {};
       } else {
+        next.myOwnIssueKeys = next.myOwnIssueKeys || [];
         next.drafts = Object.fromEntries(Object.entries(next.drafts || {}).map(([key, draft]) => [
           key,
           draft.submittedAt
@@ -383,16 +453,56 @@ function App() {
       draft.entries.reduce((sum, entry) => sum + parseMinutes(entry.hours), 0),
     ]),
   ), [appState.drafts]);
-
-  const pendingMinutes = Object.values(minutesPerIssue).reduce((sum, item) => sum + item, 0);
-  const totalMinutes = todayWorklogs.totalMinutes + pendingMinutes;
   const capMinutes = Math.round((Number(appState.cap) || DEFAULT_CAP) * 60);
-  const remainingMinutes = Math.max(0, capMinutes - totalMinutes);
-  const capReached = totalMinutes >= capMinutes;
+  const activeIssues = useMemo(() => {
+    const selected = issues.filter((issue) => appState.drafts[issue.key]);
+    const ownOrder = new Map((appState.myOwnIssueKeys || []).map((key, index) => [key, index]));
+    const ordered = selected
+      .map((issue, index) => ({ issue, index, ownIndex: ownOrder.get(issue.key) }))
+      .sort((a, b) => {
+        if (a.ownIndex != null && b.ownIndex != null) return a.ownIndex - b.ownIndex;
+        if (a.ownIndex != null) return -1;
+        if (b.ownIndex != null) return 1;
+        return a.index - b.index;
+      })
+      .map(({ issue }) => issue);
+    return appState.showRecentTickets === false
+      ? ordered.filter((issue) => ownOrder.has(issue.key))
+      : ordered;
+  }, [issues, appState.drafts, appState.myOwnIssueKeys, appState.showRecentTickets]);
+  const autoIssueKey = activeIssues.at(-1)?.key || null;
+  const baseRemaining = Object.fromEntries(activeIssues.map((issue) => {
+    const draft = appState.drafts[issue.key];
+    const logged = todayWorklogs.byIssue[issue.key] || 0;
+    if (draft.remainingHours !== undefined) return [issue.key, parseMinutes(draft.remainingHours)];
+    if (draft.ticketHours !== undefined || draft.autoHours !== undefined) {
+      return [issue.key, Math.max(0, parseMinutes(draft.ticketHours ?? draft.autoHours) - logged)];
+    }
+    return [issue.key, logged > 0 ? 0 : minutesPerIssue[issue.key] || 0];
+  }));
+  const manualMinutesBeforeAuto = activeIssues.reduce((sum, issue) => (
+    issue.key === autoIssueKey ? sum : sum + (baseRemaining[issue.key] || 0)
+  ), 0);
+  const autoMinutes = autoIssueKey
+    ? Math.max(0, capMinutes - todayWorklogs.totalMinutes - manualMinutesBeforeAuto)
+    : 0;
+  const autoDraft = autoIssueKey ? appState.drafts[autoIssueKey] : undefined;
+  const autoRemaining = autoDraft?.remainingHours !== undefined
+    ? parseMinutes(autoDraft.remainingHours)
+    : autoDraft?.ticketHours !== undefined || autoDraft?.autoHours !== undefined
+      ? Math.max(0, parseMinutes(autoDraft.ticketHours ?? autoDraft.autoHours) - (todayWorklogs.byIssue[autoIssueKey] || 0))
+      : autoMinutes;
+  const remainingMinutesPerIssue = {
+    ...baseRemaining,
+    ...(autoIssueKey ? { [autoIssueKey]: autoRemaining } : {}),
+  };
+  const pendingMinutes = activeIssues.reduce((sum, issue) => sum + (remainingMinutesPerIssue[issue.key] || 0), 0);
+  const totalMinutes = todayWorklogs.totalMinutes + pendingMinutes;
+  const remainingLoggedMinutes = Math.max(0, capMinutes - todayWorklogs.totalMinutes);
   const overCap = totalMinutes > capMinutes;
   const connected = Boolean(appState.credentials);
-  const activeIssues = issues.filter((issue) => appState.drafts[issue.key]);
-  const pendingCount = activeIssues.filter((issue) => (minutesPerIssue[issue.key] || 0) > 0).length;
+  const pendingCount = activeIssues.filter((issue) => (remainingMinutesPerIssue[issue.key] || 0) > 0).length;
+  const hiddenRecentCount = Object.keys(appState.drafts).filter((key) => !(appState.myOwnIssueKeys || []).includes(key)).length;
   const logsComplete = worklogsLoaded && todayWorklogs.totalMinutes >= capMinutes;
   const wellDone = logsComplete || completionDay === todayKey();
 
@@ -444,19 +554,22 @@ function App() {
           const merged = new Map([...list, ...retained].map((issue) => [issue.key, issue]));
           loggedIssues.forEach((issue) => merged.set(issue.key, issue));
           setIssues([...merged.values()]);
-          setAppState((current) => ({
-            ...current,
-            drafts: includeIssuesAsDrafts(current.drafts, loggedIssues),
-          }));
+          setAppState((current) => ({ ...current, drafts: includeIssuesAsDrafts(current.drafts, loggedIssues) }));
         }
+        setAppState((current) => ({
+          ...current,
+          drafts: includeIssuesAsDrafts(
+            convertLegacyTimeDrafts(current.drafts, worklogsResult.value.byIssue),
+            list,
+          ),
+        }));
       } else {
         setWorklogsLoaded(false);
         setWorklogError(worklogsResult.reason?.message || 'Could not fetch today’s Jira worklogs.');
       }
-      setAppState((current) => ({
-        ...current,
-        drafts: includeIssuesAsDrafts(current.drafts, list),
-      }));
+      if (worklogsResult.status !== 'fulfilled') {
+        setAppState((current) => ({ ...current, drafts: includeIssuesAsDrafts(current.drafts, list) }));
+      }
     } catch (error) {
       setPageError(error.message || 'Could not load Jira issues.');
     } finally {
@@ -484,11 +597,12 @@ function App() {
       const recentIssues = recentResult.value;
       const worklogs = worklogsResult.status === 'fulfilled' ? worklogsResult.value : null;
       const loggedIssues = worklogs ? await getIssueDetails(credentials, Object.keys(worklogs.byIssue)) : [];
-      const visibleIssues = [...new Map([...recentIssues, ...loggedIssues].map((issue) => [issue.key, issue])).values()];
+      const retainedIssues = Object.values(appState.drafts).map((draft) => draft.issue).filter(Boolean);
+      const visibleIssues = [...new Map([...recentIssues, ...loggedIssues, ...retainedIssues].map((issue) => [issue.key, issue])).values()];
       const nextState = {
         ...appState,
         credentials,
-        drafts: includeIssuesAsDrafts(appState.drafts, visibleIssues),
+        drafts: includeIssuesAsDrafts(convertLegacyTimeDrafts(appState.drafts, worklogs?.byIssue || {}), visibleIssues),
       };
       await writeStorage(STORE_KEY, nextState);
       setAppState(nextState);
@@ -535,6 +649,11 @@ function App() {
     updateDraft(issueKey, (draft) => ({ ...draft, description: value }));
   }
 
+  function updateTicketHours(issueKey, value) {
+    if (!/^\d*\.?\d*$/.test(value)) return;
+    updateDraft(issueKey, (draft) => ({ ...draft, remainingHours: value }));
+  }
+
   function removeEntry(issueKey, entryId) {
     updateDraft(issueKey, (draft) => {
       const entries = draft.entries.filter((entry) => entry.id !== entryId);
@@ -546,34 +665,43 @@ function App() {
     setAppState((current) => {
       const source = current.drafts[sourceKey];
       const target = current.drafts[targetKey];
-      if (!source || !target) return current;
-      let remaining = excessMinutes;
-      const entries = [...source.entries];
-      for (let index = entries.length - 1; index >= 0 && remaining > 0; index -= 1) {
-        const minutes = parseMinutes(entries[index].hours);
-        const moved = Math.min(minutes, remaining);
-        entries[index] = { ...entries[index], hours: formatHours(minutes - moved) };
-        remaining -= moved;
-      }
-      const movedMinutes = excessMinutes - remaining;
+      if (!source || !target || sourceKey === targetKey) return current;
+      const movedMinutes = Math.min(excessMinutes, remainingMinutesPerIssue[sourceKey] || 0);
       if (!movedMinutes) return current;
-      const targetEntries = [...target.entries];
-      const firstEntry = targetEntries[0] || { id: crypto.randomUUID(), hours: '' };
-      targetEntries[0] = { ...firstEntry, hours: formatHours(parseMinutes(firstEntry.hours) + movedMinutes) };
       return {
         ...current,
         drafts: {
           ...current.drafts,
-          [sourceKey]: { ...source, entries },
-          [targetKey]: { ...target, entries: targetEntries },
+          [sourceKey]: { ...source, remainingHours: formatHours((remainingMinutesPerIssue[sourceKey] || 0) - movedMinutes) },
+          [targetKey]: { ...target, remainingHours: formatHours((remainingMinutesPerIssue[targetKey] || 0) + movedMinutes) },
         },
       };
     });
   }
 
-  function selectIssue(issue) {
+  function selectIssue(issue, source = 'recent') {
+    setIssues((current) => current.some((item) => item.key === issue.key)
+      ? current.map((item) => item.key === issue.key ? issue : item)
+      : [...current, issue]);
     setAppState((current) => ({
       ...current,
+      drafts: {
+        ...current.drafts,
+        [issue.key]: current.drafts[issue.key] || { issue, entries: [{ id: crypto.randomUUID(), hours: '' }], description: '', submittedAt: null },
+      },
+      myOwnIssueKeys: source === 'own'
+        ? [...(current.myOwnIssueKeys || []).filter((key) => key !== issue.key), issue.key]
+        : current.myOwnIssueKeys || [],
+    }));
+  }
+
+  function prioritizeOwnIssue(issue) {
+    setIssues((current) => current.some((item) => item.key === issue.key)
+      ? current.map((item) => item.key === issue.key ? issue : item)
+      : [...current, issue]);
+    setAppState((current) => ({
+      ...current,
+      myOwnIssueKeys: [...(current.myOwnIssueKeys || []).filter((key) => key !== issue.key), issue.key],
       drafts: {
         ...current.drafts,
         [issue.key]: current.drafts[issue.key] || { issue, entries: [{ id: crypto.randomUUID(), hours: '' }], description: '', submittedAt: null },
@@ -585,21 +713,43 @@ function App() {
     setAppState((current) => {
       const drafts = { ...current.drafts };
       delete drafts[issueKey];
-      return { ...current, drafts };
+      return {
+        ...current,
+        drafts,
+        myOwnIssueKeys: (current.myOwnIssueKeys || []).filter((key) => key !== issueKey),
+      };
     });
+  }
+
+  function toggleIssue(issue, source) {
+    const isSelected = Boolean(appState.drafts[issue.key]);
+    const isPriority = (appState.myOwnIssueKeys || []).includes(issue.key);
+    if (source === 'own') {
+      if (!isSelected) selectIssue(issue, 'own');
+      else if (!isPriority) prioritizeOwnIssue(issue);
+      else removeIssue(issue.key);
+      return;
+    }
+    if (isSelected) removeIssue(issue.key);
+    else selectIssue(issue, 'recent');
   }
 
   async function submitLogs() {
     if (!appState.credentials || pendingCount === 0 || pendingMinutes === 0 || overCap) return;
     setBusy(true);
     setPageError('');
-    let successfulTotalMinutes = todayWorklogs.totalMinutes;
+    let didWrite = false;
     for (const issue of activeIssues) {
       const draft = appState.drafts[issue.key];
-      const minutes = minutesPerIssue[issue.key] || 0;
-      if (!minutes) continue;
-      const comment = toWorklogComment(draft.description || '');
+      const minutes = remainingMinutesPerIssue[issue.key] || 0;
+      if (minutes <= 0) continue;
+      const existingWorklogs = todayWorklogs.worklogsByIssue?.[issue.key] || [];
       try {
+        const describedRecord = [...existingWorklogs].reverse().find((record) => record.description) || existingWorklogs.at(-1);
+        const description = draft.worklogDescription !== undefined
+          ? draft.worklogDescription
+          : describedRecord?.description || draft.description || '';
+        const comment = toWorklogComment(description);
         await jiraRequest(appState.credentials, `/rest/api/3/issue/${encodeURIComponent(issue.key)}/worklog`, {
           method: 'POST',
           body: JSON.stringify({
@@ -608,24 +758,25 @@ function App() {
             ...(comment ? { comment } : {}),
           }),
         });
-        setTodayWorklogs((current) => ({
-          ...current,
-          totalMinutes: current.totalMinutes + minutes,
-          byIssue: { ...current.byIssue, [issue.key]: (current.byIssue[issue.key] || 0) + minutes },
-        }));
-        successfulTotalMinutes += minutes;
+        didWrite = true;
         setAppState((current) => ({
           ...current,
           drafts: {
             ...current.drafts,
-            [issue.key]: { ...current.drafts[issue.key], entries: [{ id: crypto.randomUUID(), hours: '' }], description: '', submittedAt: null, submitError: '' },
+            [issue.key]: {
+              ...current.drafts[issue.key],
+              entries: [{ id: crypto.randomUUID(), hours: '' }],
+              description: '',
+              remainingHours: undefined,
+              ticketHours: undefined,
+              autoHours: undefined,
+              worklogDescription: undefined,
+              worklogEdits: {},
+              submittedAt: null,
+              submitError: '',
+            },
           },
         }));
-        if (successfulTotalMinutes >= capMinutes) {
-          const day = todayKey();
-          setCompletionDay(day);
-          await writeStorage(COMPLETION_KEY, day);
-        }
       } catch (error) {
         setAppState((current) => ({
           ...current,
@@ -637,10 +788,17 @@ function App() {
       }
     }
     setBusy(false);
+    if (didWrite) {
+      try {
+        setTodayWorklogs(await getTodaysWorklogs(appState.credentials));
+      } catch (error) {
+        setWorklogError(error.message || 'Could not refresh today’s Jira worklogs.');
+      }
+    }
   }
 
   async function disconnect() {
-    setAppState((current) => ({ ...current, credentials: null, drafts: {} }));
+    setAppState((current) => ({ ...current, credentials: null, drafts: {}, myOwnIssueKeys: [] }));
     setIssues([]);
     setForm({ site: '', email: '', token: '' });
     setConnectionError('');
@@ -695,6 +853,8 @@ function App() {
         <SetupScreen
           form={form}
           setForm={setForm}
+          theme={appState.theme || 'system'}
+          onThemeChange={(theme) => setAppState((current) => ({ ...current, theme }))}
           showToken={showToken}
           setShowToken={setShowToken}
           error={connectionError}
@@ -721,7 +881,11 @@ function App() {
         />
       ) : (
         <>
-          <Header onSettings={() => setScreen('settings')} />
+          <Header
+            theme={appState.theme || 'system'}
+            onThemeChange={(theme) => setAppState((current) => ({ ...current, theme }))}
+            onSettings={() => setScreen('settings')}
+          />
           <section className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-4 scrollbar-soft">
               {wellDone ? <WellDoneBanner /> : reminderSource ? <ReminderBanner source={reminderSource} snoozeMinutes={appState.reminderSettings.snoozeMinutes} onSnooze={snoozeReminder} /> : snoozeFeedback ? <SnoozedBanner message={snoozeFeedback} /> : null}
@@ -740,21 +904,32 @@ function App() {
                 </button>
               </div>
 
-              <DailyProgress total={totalMinutes} cap={capMinutes} remaining={remainingMinutes} capValue={appState.cap} onChange={saveCap} />
+              <DailyProgress total={todayWorklogs.totalMinutes} cap={capMinutes} remaining={remainingLoggedMinutes} capValue={appState.cap} onChange={saveCap} />
               {worklogError && <div className="mt-2"><InlineAlert message={`${worklogError} Existing hours may be missing from the total until refreshed.`} /></div>}
 
-              <div className="mb-3 mt-5 flex items-center justify-between gap-2">
+              <div className="sticky top-0 z-10 -mx-4 mb-3 mt-5 flex items-center justify-between gap-2 border-b border-slate-200/80 bg-white px-4 py-2">
                 <div>
                   <h2 className="text-[13px] font-semibold text-slate-800">Tickets to log</h2>
                   <p className="mt-0.5 text-[11px] text-slate-400">{activeIssues.length} tickets selected for today</p>
                 </div>
-                <button
-                  onClick={openIssuePicker}
-                  disabled={busy}
-                  className="flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-semibold text-slate-600 transition hover:border-violet-200 hover:text-violet-700 disabled:opacity-50"
-                >
-                  <ListPlus size={14} /> Manage
-                </button>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <button
+                    type="button"
+                    aria-pressed={appState.showRecentTickets !== false}
+                    onClick={() => setAppState((current) => ({ ...current, showRecentTickets: current.showRecentTickets === false }))}
+                    className={`flex items-center gap-1 rounded-lg border px-2 py-2 text-[11px] font-semibold transition ${appState.showRecentTickets !== false ? 'border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300' : 'border-slate-200 bg-white text-slate-500 hover:border-violet-200 hover:text-violet-700'}`}
+                    title="Show or hide selected recent tickets"
+                  >
+                    Recent {appState.showRecentTickets !== false ? 'On' : 'Off'}
+                  </button>
+                  <button
+                    onClick={openIssuePicker}
+                    disabled={busy}
+                    className="flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-semibold text-slate-600 transition hover:border-violet-200 hover:text-violet-700 disabled:opacity-50"
+                  >
+                    <ListPlus size={14} /> Manage
+                  </button>
+                </div>
               </div>
 
               {pageError && <InlineAlert message={pageError} />}
@@ -770,71 +945,60 @@ function App() {
                 <div className="rounded-xl border border-dashed border-slate-300 bg-white/60 px-4 py-7 text-center">
                   <div className="mx-auto mb-2 grid size-9 place-items-center rounded-xl bg-violet-50 text-violet-700"><ListPlus size={17} /></div>
                   <p className="text-[12px] font-semibold text-slate-700">Choose tickets for today</p>
-                  <p className="mt-1 text-[11px] leading-4 text-slate-400">Pick tickets from your updates or assigned work to add time.</p>
-                  <button onClick={openIssuePicker} className="mt-3 rounded-lg bg-violet-700 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-violet-800">Select tickets</button>
+                  <p className="mt-1 text-[11px] leading-4 text-slate-400">{appState.showRecentTickets === false && hiddenRecentCount > 0 ? 'Recent tickets are hidden. Turn them on to see your selected tickets.' : 'Pick tickets from your updates or assigned work to add time.'}</p>
+                  <button onClick={() => hiddenRecentCount > 0 && appState.showRecentTickets === false ? setAppState((current) => ({ ...current, showRecentTickets: true })) : openIssuePicker()} className="mt-3 rounded-lg bg-violet-700 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-violet-800">{hiddenRecentCount > 0 && appState.showRecentTickets === false ? 'Show recent tickets' : 'Select tickets'}</button>
                 </div>
               ) : (
-                <div className="flex flex-col gap-2.5">
+                <div className="flex flex-col gap-1.5">
                   {activeIssues.map((issue) => {
                     const draft = appState.drafts[issue.key];
-                    const issueMinutes = minutesPerIssue[issue.key] || 0;
+                    const isAutoIssue = issue.key === autoIssueKey;
+                    const remainingToLog = remainingMinutesPerIssue[issue.key] || 0;
                     const loggedMinutes = todayWorklogs.byIssue[issue.key] || 0;
-                    const excessMinutes = issue.estimateMinutes == null ? 0 : Math.max(0, loggedMinutes + issueMinutes - issue.estimateMinutes);
+                    const issueWorklogs = todayWorklogs.worklogsByIssue?.[issue.key] || [];
+                    const latestWorklog = [...issueWorklogs].reverse().find((worklog) => worklog.description) || issueWorklogs.at(-1);
+                    const excessMinutes = issue.estimateMinutes == null ? 0 : Math.max(0, loggedMinutes + remainingToLog - issue.estimateMinutes);
                     const issueIndex = activeIssues.findIndex((item) => item.key === issue.key);
                     const nextIssue = activeIssues.slice(issueIndex + 1).find((item) => item.key !== issue.key)
                       || activeIssues.slice(0, issueIndex).find((item) => item.key !== issue.key);
                     return (
-                      <article key={issue.key} className={`rounded-xl border bg-white px-3.5 py-3 shadow-[0_1px_2px_rgba(16,24,40,.03)] ${loggedMinutes ? 'border-emerald-200' : 'border-slate-200'}`}>
-                        <div className="mb-2.5 flex items-start justify-between gap-3">
+                      <article key={issue.key} className={`rounded-xl border bg-white px-2.5 py-2 shadow-[0_1px_2px_rgba(16,24,40,.03)] ${loggedMinutes ? 'border-emerald-200' : 'border-slate-200'}`}>
+                        <div className="mb-1.5 flex items-start justify-between gap-2">
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5">
-                              <span className="text-[10px] font-bold text-violet-700">{issue.key}</span>
-                              {loggedMinutes > 0 && <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-700"><CheckCircle2 size={10} /> Logged {formatDuration(loggedMinutes)}</span>}
+                              <span className="text-[11px] font-bold text-violet-700">{issue.key}</span>
+                              <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">Logged {formatDuration(loggedMinutes)}</span>
+                              {isAutoIssue && <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700">Auto</span>}
                             </div>
-                            <p className="mt-1 line-clamp-2 text-[12px] font-semibold leading-4 text-slate-700">{issue.title}</p>
+                            <p className="mt-0.5 line-clamp-1 text-[12px] font-semibold leading-4 text-slate-700">{issue.title}</p>
                           </div>
-                          <div className="flex shrink-0 items-center gap-2">
-                            <span className="text-[11px] font-semibold tabular-nums text-slate-500">{formatDuration(loggedMinutes + issueMinutes)}</span>
-                            <button onClick={() => removeIssue(issue.key)} className="rounded p-1 text-slate-300 transition hover:bg-rose-50 hover:text-rose-500" title="Remove ticket"><X size={14} /></button>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            <span className="text-[11px] font-semibold tabular-nums text-slate-500">{formatDuration(remainingToLog)} to log</span>
+                            <button onClick={() => removeIssue(issue.key)} className="rounded p-0.5 text-slate-300 transition hover:bg-rose-50 hover:text-rose-500" title="Remove ticket"><X size={13} /></button>
                           </div>
                         </div>
-                        <div className="mb-2 flex items-center justify-between rounded-lg bg-slate-50 px-2.5 py-1.5 text-[10px]">
-                          <span className="text-slate-500">Original estimate</span>
-                          <span className="font-semibold tabular-nums text-slate-600">{issue.estimateMinutes == null ? 'Not set' : formatDuration(issue.estimateMinutes)}</span>
-                        </div>
-                        {excessMinutes > 0 && <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] leading-4 text-amber-800">
-                          <div className="flex items-start gap-1.5"><AlertCircle size={13} className="mt-0.5 shrink-0" /><span>Today’s logged plus planned time is {formatDuration(excessMinutes)} over this ticket’s estimate.</span></div>
+                        {excessMinutes > 0 && <div className="mb-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-4 text-amber-800">
+                          <div className="flex items-start gap-1.5"><AlertCircle size={13} className="mt-0.5 shrink-0" /><span>Today’s time is {formatDuration(excessMinutes)} over this ticket’s estimate.</span></div>
                           {nextIssue ? <button onClick={() => moveExcess(issue.key, nextIssue.key, excessMinutes)} className="mt-1.5 ml-5 font-semibold text-amber-900 underline decoration-amber-400 underline-offset-2 hover:text-amber-950">Move {formatDuration(excessMinutes)} to {nextIssue.key}</button> : <p className="mt-1 ml-5 text-amber-700">Add another ticket to move the extra time.</p>}
                         </div>}
-                        <div className="flex flex-col gap-1.5">
-                          {draft.entries.map((entry, index) => (
-                            <div key={entry.id} className="flex items-center gap-2">
-                              <span className="w-14 shrink-0 text-[10px] text-slate-400">Entry {index + 1}</span>
-                              <div className="relative flex-1">
-                                <input
-                                  type="number" inputMode="decimal" min="0" max="24" step="0.25" placeholder="0.0"
-                                  value={entry.hours} disabled={busy || (capReached && !entry.hours)}
-                                  onChange={(event) => updateEntry(issue.key, entry.id, event.target.value)}
-                                  className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50/70 pl-2.5 pr-10 text-[12px] font-medium tabular-nums text-slate-700 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100 disabled:opacity-60"
-                                />
-                                <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-medium text-slate-400">hours</span>
-                              </div>
-                              {!busy && draft.entries.length > 1 && <button onClick={() => removeEntry(issue.key, entry.id)} className="rounded p-1.5 text-slate-300 hover:bg-rose-50 hover:text-rose-500" title="Remove entry"><Trash2 size={13} /></button>}
-                            </div>
-                          ))}
-                        </div>
-                        <button onClick={() => addEntry(issue.key)} disabled={busy || capReached} className="mt-2 flex min-h-7 items-center gap-1 text-[11px] font-semibold text-violet-700 transition hover:text-violet-900 disabled:opacity-50"><Plus size={13} /> Add another entry</button>
-                        <div className="mt-2">
-                          <label htmlFor={`worklog-description-${issue.key}`} className="mb-1 block text-[10px] font-medium text-slate-500">Description <span className="font-normal text-slate-400">(optional)</span></label>
+                        <div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] gap-2">
+                          <div className="min-w-0">
+                            <label htmlFor={`worklog-hours-${issue.key}`} className="mb-1 flex items-center justify-between gap-1 text-[11px] font-medium text-slate-500"><span>Remaining to log</span><span>Estimate {issue.estimateMinutes == null ? '—' : formatDuration(issue.estimateMinutes)}</span></label>
+                            <input id={`worklog-hours-${issue.key}`} aria-label={`Remaining time to log for ${issue.key}`} type="number" inputMode="decimal" min="0" max="24" step="0.25" value={draft.remainingHours ?? (draft.ticketHours !== undefined || draft.autoHours !== undefined ? formatHours(Math.max(0, parseMinutes(draft.ticketHours ?? draft.autoHours) - loggedMinutes)) : formatHours(remainingToLog))} disabled={busy} onChange={(event) => updateTicketHours(issue.key, event.target.value)} className={`h-10 w-full rounded-md border px-2 text-[14px] font-semibold tabular-nums outline-none focus:ring-2 disabled:opacity-60 ${isAutoIssue ? 'border-violet-200 bg-violet-50 text-violet-800 focus:border-violet-500 focus:ring-violet-200' : 'border-slate-200 bg-slate-50/70 text-slate-800 focus:border-violet-400 focus:bg-white focus:ring-violet-100'}`} />
+                          </div>
+                          <div className="min-w-0">
+                          <label htmlFor={`worklog-description-${issue.key}`} className="mb-1 block text-[11px] font-medium text-slate-500">Description</label>
                           <textarea
                             id={`worklog-description-${issue.key}`}
-                            value={draft.description || ''}
+                            value={draft.worklogDescription !== undefined ? draft.worklogDescription : latestWorklog?.description || draft.description || ''}
                             disabled={busy}
-                            onChange={(event) => updateDescription(issue.key, event.target.value)}
+                            onChange={(event) => updateDraft(issue.key, (current) => ({ ...current, worklogDescription: event.target.value }))}
                             placeholder="Describe the work completed on this ticket"
                             rows={2}
-                            className="w-full resize-y rounded-lg border border-slate-200 bg-slate-50/70 px-2.5 py-2 text-[11px] leading-4 text-slate-700 outline-none transition placeholder:text-slate-300 focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100 disabled:opacity-60"
+                            style={{ fontSize: '12px' }}
+                            className="h-10 min-h-10 w-full resize-y rounded-md border border-slate-200 bg-slate-50/70 px-2 py-1 text-slate-700 outline-none transition placeholder:text-slate-300 focus:border-violet-400 focus:bg-white focus:ring-1 focus:ring-violet-100 disabled:opacity-60"
                           />
+                          </div>
                         </div>
                         {draft.submitError && <p className="mt-2 text-[11px] font-medium text-rose-600">{draft.submitError}</p>}
                       </article>
@@ -938,15 +1102,17 @@ function IssuePicker({ issues, drafts, loggedByIssue, busy, recentError, onRefre
                 const draft = drafts[issue.key];
                 const selected = Boolean(draft);
                 const loggedMinutes = loggedByIssue[issue.key] || 0;
+                const prioritized = ownIssueKeys.includes(issue.key);
                 return (
                   <button
                     key={issue.key}
-                    onClick={() => onToggle(issue)}
+                    onClick={() => onToggle(issue, mode)}
                     aria-pressed={selected}
                     className={`flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition ${selected ? 'border-violet-200 bg-violet-50/70' : 'border-slate-200 bg-white hover:border-violet-200'}`}
                   >
                     <span className={`grid size-[18px] shrink-0 place-items-center rounded-[5px] border ${selected ? 'border-violet-600 bg-violet-600 text-white' : 'border-slate-300 bg-white'}`}>{selected && <Check size={12} strokeWidth={3} />}</span>
                     <span className="min-w-0 flex-1"><span className="block truncate text-[12px] font-semibold text-slate-700">{issue.title}</span><span className="mt-0.5 block text-[10px] text-slate-400"><b className="font-semibold text-violet-700">{issue.key}</b> · {issue.type}</span></span>
+                    {prioritized && <span className="shrink-0 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-semibold text-violet-700">First</span>}
                     {loggedMinutes > 0 && <span className="flex shrink-0 items-center gap-1 text-[10px] font-semibold text-emerald-700"><CheckCircle2 size={12} /> {formatDuration(loggedMinutes)}</span>}
                   </button>
                 );
@@ -963,7 +1129,21 @@ function IssuePicker({ issues, drafts, loggedByIssue, busy, recentError, onRefre
   );
 }
 
-function Header({ onSettings }) {
+function ThemeSelect({ theme, onChange }) {
+  const ThemeIcon = theme === 'dark' ? Moon : theme === 'light' ? Sun : Monitor;
+  return (
+    <label className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 text-slate-500 shadow-sm">
+      <ThemeIcon size={14} />
+      <select aria-label="Color theme" value={theme} onChange={(event) => onChange(event.target.value)} className="max-w-[76px] cursor-pointer bg-transparent text-[10px] font-semibold text-slate-600 outline-none">
+        <option value="system">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
+  );
+}
+
+function Header({ theme, onThemeChange, onSettings }) {
   return (
     <header className="flex h-[54px] items-center justify-between border-b border-slate-200/80 bg-white px-5">
       <div className="flex items-center gap-2.5">
@@ -972,6 +1152,7 @@ function Header({ onSettings }) {
       </div>
       <div className="flex items-center gap-2">
         <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[9px] font-semibold text-emerald-700"><span className="size-1.5 rounded-full bg-emerald-500" /> Connected</span>
+        <ThemeSelect theme={theme} onChange={onThemeChange} />
         <button onClick={onSettings} className="grid size-7 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700" title="Jira connection settings"><Settings2 size={15} /></button>
       </div>
     </header>
@@ -980,16 +1161,17 @@ function Header({ onSettings }) {
 
 function DailyProgress({ total, cap, remaining, capValue, onChange }) {
   const progress = Math.min(100, (total / cap) * 100);
+  const progressColor = total >= cap ? 'bg-green-500' : total <= 120 ? 'bg-red-500' : total <= 240 ? 'bg-yellow-400' : 'bg-blue-500';
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(String(capValue));
   const commit = () => { onChange(value); setEditing(false); };
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_2px_7px_rgba(16,24,40,.03)]">
       <div className="flex items-start justify-between">
-        <div><p className="text-[11px] font-medium text-slate-400">Total time entered</p><p className="mt-0.5 text-[26px] font-semibold leading-tight tracking-[-0.05em] text-slate-900">{formatDuration(total)} <span className="text-[13px] font-medium tracking-normal text-slate-400">/ {capValue}h</span></p></div>
+        <div><p className="text-[11px] font-medium text-slate-400">Logged time</p><p className="mt-0.5 text-[26px] font-semibold leading-tight tracking-[-0.05em] text-slate-900">{formatDuration(total)} <span className="text-[13px] font-medium tracking-normal text-slate-400">/ {capValue}h</span></p></div>
         <div className="flex items-center gap-1 rounded-full bg-violet-50 px-2 py-1 text-[10px] font-semibold text-violet-700"><Clock3 size={11} /> {formatDuration(remaining)} left</div>
       </div>
-      <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full transition-all duration-300 ${progress >= 100 ? 'bg-amber-500' : 'bg-violet-600'}`} style={{ width: `${progress}%` }} /></div>
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full transition-all duration-300 ${progressColor}`} style={{ width: `${progress}%` }} /></div>
       <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400"><span>Daily target</span>
         {editing ? <span className="flex items-center gap-1"><input type="number" min="0.25" max="24" step="0.25" value={value} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && commit()} className="w-12 rounded border border-slate-200 px-1 py-0.5 text-right text-slate-700 outline-none focus:border-violet-400" autoFocus /><span>h</span><button onClick={commit} className="ml-1 font-semibold text-violet-700">Save</button><button onClick={() => setEditing(false)} className="text-slate-400"><X size={12} /></button></span> : <button onClick={() => { setValue(String(capValue)); setEditing(true); }} className="font-semibold text-slate-500 hover:text-violet-700">Edit limit</button>}
       </div>
@@ -1026,16 +1208,27 @@ function InlineAlert({ message }) {
   return <div className="mb-3 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-[11px] leading-4 text-rose-700"><AlertCircle size={14} className="mt-0.5 shrink-0" />{message}</div>;
 }
 
-function SetupScreen({ form, setForm, showToken, setShowToken, error, busy, onSubmit, existing, onBack }) {
+function SetupScreen({ form, setForm, theme, onThemeChange, showToken, setShowToken, error, busy, onSubmit, existing, onBack }) {
   return (
     <div className="animate-enter h-full overflow-y-auto px-6 pb-6 pt-5 scrollbar-soft">
       <header className="mb-5 flex items-center justify-between">
         <div className="flex items-center gap-2.5"><div className="grid size-8 place-items-center rounded-xl bg-violet-700 text-white"><Clock3 size={17} /></div><div><p className="text-[13px] font-bold text-slate-800">Jira Timekeeper</p><p className="text-[10px] text-slate-400">Bulk log your workday</p></div></div>
-        {existing && <button onClick={onBack} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-medium text-slate-500 hover:bg-slate-100"><ArrowLeft size={13} /> Back</button>}
+        <div className="flex items-center gap-1.5">
+          {existing && <button onClick={onBack} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-medium text-slate-500 hover:bg-slate-100"><ArrowLeft size={13} /> Back</button>}
+        </div>
       </header>
-      <div className="mb-4 rounded-2xl border border-violet-100 bg-gradient-to-br from-violet-50 to-white p-4">
+      <div className="mb-3 flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2">
+        <span className="text-[11px] font-semibold text-slate-600">Appearance</span>
+        <ThemeSelect theme={theme} onChange={onThemeChange} />
+      </div>
+      <div className="setup-info-panel mb-4 rounded-2xl border p-4">
         <div className="mb-2 flex items-center gap-2 text-violet-700"><LockKeyhole size={15} /><span className="text-[11px] font-semibold">Connect your Jira Cloud</span></div>
-        <p className="text-[11px] leading-[17px] text-slate-500">Your API token is stored in this Chrome profile and sent directly to your Jira site. This extension does not use a hosted service.</p>
+        <ol className="list-inside list-decimal space-y-1 text-[11px] leading-[16px] text-slate-600">
+          <li>Enter your Jira site address, such as <span className="font-medium">your-team.atlassian.net</span>, and your Atlassian account email.</li>
+          <li>Create an API token with the link below and paste it here.</li>
+          <li>Select <span className="font-semibold">Connect to Jira</span>, then allow access to your Jira site when your browser asks.</li>
+        </ol>
+        <p className="mt-2 text-[10px] leading-4 text-slate-500">Your token is stored in this browser profile and sent directly to your Jira site. No hosted service is used.</p>
       </div>
       <form onSubmit={onSubmit} className="flex flex-col gap-3">
         <Field label="Jira site URL" placeholder="your-team.atlassian.net" value={form.site} onChange={(value) => setForm((current) => ({ ...current, site: value }))} autoComplete="url" />
