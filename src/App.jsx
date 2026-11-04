@@ -455,7 +455,13 @@ function App() {
   ), [appState.drafts]);
   const capMinutes = Math.round((Number(appState.cap) || DEFAULT_CAP) * 60);
   const activeIssues = useMemo(() => {
-    const selected = issues.filter((issue) => appState.drafts[issue.key]);
+    // Saved drafts are the source of truth for selected tickets. Keep their
+    // issue records available even if a refresh no longer returns the issue.
+    const available = new Map(issues.map((issue) => [issue.key, issue]));
+    Object.values(appState.drafts).forEach((draft) => {
+      if (draft.issue && !available.has(draft.issue.key)) available.set(draft.issue.key, draft.issue);
+    });
+    const selected = [...available.values()].filter((issue) => appState.drafts[issue.key]);
     const ownOrder = new Map((appState.myOwnIssueKeys || []).map((key, index) => [key, index]));
     const ordered = selected
       .map((issue, index) => ({ issue, index, ownIndex: ownOrder.get(issue.key) }))
@@ -934,9 +940,9 @@ function App() {
 
               {pageError && <InlineAlert message={pageError} />}
 
-              {busy && issues.length === 0 ? (
+              {busy && issues.length === 0 && activeIssues.length === 0 ? (
                 <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-4 text-[12px] text-slate-500"><LoaderCircle size={15} className="animate-spin text-violet-600" /> Loading your Jira issues…</div>
-              ) : issues.length === 0 ? (
+              ) : activeIssues.length === 0 && issues.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-slate-300 bg-white/60 px-4 py-6 text-center">
                   <p className="text-[12px] font-medium text-slate-700">No assigned tickets updated today</p>
                   <p className="mt-1 text-[11px] leading-4 text-slate-400">Open Manage to refresh today’s ticket updates or search your assigned tickets.</p>
