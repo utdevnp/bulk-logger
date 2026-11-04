@@ -253,13 +253,13 @@ async function getIssueDetails(credentials, keys) {
   return results.filter(Boolean);
 }
 
-function includeIssuesAsDrafts(drafts, issues) {
+function includeIssuesAsDrafts(drafts, issues, source = 'recent') {
   const nextDrafts = { ...drafts };
   issues.forEach((issue) => {
     const existing = nextDrafts[issue.key];
     nextDrafts[issue.key] = existing
       ? { ...existing, issue }
-      : { issue, entries: [{ id: crypto.randomUUID(), hours: '' }], description: '', submittedAt: null };
+      : { issue, source, entries: [{ id: crypto.randomUUID(), hours: '' }], description: '', submittedAt: null };
   });
   return nextDrafts;
 }
@@ -468,7 +468,9 @@ function App() {
     const ownOrder = new Map((appState.myOwnIssueKeys || []).map((key, index) => [key, index]));
     let nextOwnIndex = ownOrder.size;
     selected.forEach((issue) => {
-      if (appState.drafts[issue.key]?.source === 'own' && !ownOrder.has(issue.key)) {
+      const source = appState.drafts[issue.key]?.source;
+      // Before source markers were saved, selected drafts were default tickets.
+      if (source !== 'recent' && !ownOrder.has(issue.key)) {
         ownOrder.set(issue.key, nextOwnIndex++);
       }
     });
@@ -703,7 +705,7 @@ function App() {
         ...current.drafts,
         [issue.key]: {
           ...(current.drafts[issue.key] || { issue, entries: [{ id: crypto.randomUUID(), hours: '' }], description: '', submittedAt: null }),
-          ...(source === 'own' ? { source: 'own' } : {}),
+          source,
         },
       },
       myOwnIssueKeys: source === 'own'
