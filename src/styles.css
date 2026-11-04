@@ -40,17 +40,26 @@ button:disabled { cursor: not-allowed; }
 :root[data-theme="dark"] [class~="text-slate-600"] { color: #c5cbd5 !important; }
 :root[data-theme="dark"] [class~="text-slate-500"], :root[data-theme="dark"] [class~="text-slate-400"] { color: #9ba5b4 !important; }
 :root[data-theme="dark"] [class*="bg-violet-50"] { background-color: #302746 !important; }
+:root[data-theme="dark"] [class*="bg-violet-100"] { background-color: #302746 !important; }
 :root[data-theme="dark"] [class*="border-violet-"] { border-color: #594b78 !important; }
-:root[data-theme="dark"] [class*="text-violet-700"], :root[data-theme="dark"] [class*="text-violet-800"], :root[data-theme="dark"] [class*="text-violet-900"] { color: #c4b5fd !important; }
+:root[data-theme="dark"] [class*="text-violet-600"], :root[data-theme="dark"] [class*="text-violet-700"], :root[data-theme="dark"] [class*="text-violet-800"], :root[data-theme="dark"] [class*="text-violet-900"] { color: #c4b5fd !important; }
 :root[data-theme="dark"] [class*="bg-emerald-50"] { background-color: #18352e !important; }
 :root[data-theme="dark"] [class*="border-emerald-"] { border-color: #2d6654 !important; }
-:root[data-theme="dark"] [class*="text-emerald-700"], :root[data-theme="dark"] [class*="text-emerald-800"] { color: #7ee0b5 !important; }
+:root[data-theme="dark"] [class*="text-emerald-600"], :root[data-theme="dark"] [class*="text-emerald-700"], :root[data-theme="dark"] [class*="text-emerald-800"] { color: #7ee0b5 !important; }
 :root[data-theme="dark"] [class*="bg-amber-50"] { background-color: #392f1d !important; }
 :root[data-theme="dark"] [class*="border-amber-"] { border-color: #70562c !important; }
 :root[data-theme="dark"] [class*="text-amber-700"], :root[data-theme="dark"] [class*="text-amber-800"], :root[data-theme="dark"] [class*="text-amber-900"] { color: #f3ca79 !important; }
+:root[data-theme="dark"] [class*="hover:text-amber-950"] { color: #f3ca79 !important; }
 :root[data-theme="dark"] [class*="bg-rose-50"] { background-color: #3b2228 !important; }
 :root[data-theme="dark"] [class*="border-rose-"] { border-color: #70414b !important; }
 :root[data-theme="dark"] [class*="text-rose-600"], :root[data-theme="dark"] [class*="text-rose-700"] { color: #f5a5b2 !important; }
+:root[data-theme="dark"] [class*="hover:text-rose-500"] { color: #f5a5b2 !important; }
+:root[data-theme="dark"] [class~="text-slate-300"] { color: #687384 !important; }
+:root[data-theme="dark"] [class*="ring-violet-"] { --tw-ring-color: #594b78 !important; }
+:root[data-theme="dark"] [class*="ring-offset-2"] { --tw-ring-offset-color: #1b2029 !important; }
+:root[data-theme="dark"] button[class~="bg-violet-700"] { background-color: #7659df; }
+:root[data-theme="dark"] button[class~="bg-violet-700"]:hover:not(:disabled) { background-color: #6749cb; }
+:root[data-theme="dark"] button:disabled[class~="disabled:bg-slate-300"] { background-color: #303846 !important; color: #8b95a4 !important; }
 :root[data-theme="dark"] input, :root[data-theme="dark"] textarea, :root[data-theme="dark"] select { color-scheme: dark; }
 :root[data-theme="dark"] input::placeholder, :root[data-theme="dark"] textarea::placeholder { color: #7f8998 !important; }
 :root[data-theme="dark"] .scrollbar-soft::-webkit-scrollbar-thumb { background: #485160; }
