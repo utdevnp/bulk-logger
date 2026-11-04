@@ -391,9 +391,12 @@ function App() {
         next.myOwnIssueKeys = next.myOwnIssueKeys || [];
         next.drafts = Object.fromEntries(Object.entries(next.drafts || {}).map(([key, draft]) => [
           key,
-          draft.submittedAt
-            ? { ...draft, entries: [{ id: crypto.randomUUID(), hours: '' }], description: '', submittedAt: null }
-            : draft,
+          {
+            ...(draft.submittedAt
+              ? { ...draft, entries: [{ id: crypto.randomUUID(), hours: '' }], description: '', submittedAt: null }
+              : draft),
+            ...(next.myOwnIssueKeys.includes(key) ? { source: 'own' } : {}),
+          },
         ]));
       }
       setAppState(next);
@@ -463,6 +466,12 @@ function App() {
     });
     const selected = [...available.values()].filter((issue) => appState.drafts[issue.key]);
     const ownOrder = new Map((appState.myOwnIssueKeys || []).map((key, index) => [key, index]));
+    let nextOwnIndex = ownOrder.size;
+    selected.forEach((issue) => {
+      if (appState.drafts[issue.key]?.source === 'own' && !ownOrder.has(issue.key)) {
+        ownOrder.set(issue.key, nextOwnIndex++);
+      }
+    });
     const ordered = selected
       .map((issue, index) => ({ issue, index, ownIndex: ownOrder.get(issue.key) }))
       .sort((a, b) => {
@@ -693,7 +702,10 @@ function App() {
       ...current,
       drafts: {
         ...current.drafts,
-        [issue.key]: current.drafts[issue.key] || { issue, entries: [{ id: crypto.randomUUID(), hours: '' }], description: '', submittedAt: null },
+        [issue.key]: {
+          ...(current.drafts[issue.key] || { issue, entries: [{ id: crypto.randomUUID(), hours: '' }], description: '', submittedAt: null }),
+          ...(source === 'own' ? { source: 'own' } : {}),
+        },
       },
       myOwnIssueKeys: source === 'own'
         ? [...(current.myOwnIssueKeys || []).filter((key) => key !== issue.key), issue.key]
@@ -710,7 +722,10 @@ function App() {
       myOwnIssueKeys: [...(current.myOwnIssueKeys || []).filter((key) => key !== issue.key), issue.key],
       drafts: {
         ...current.drafts,
-        [issue.key]: current.drafts[issue.key] || { issue, entries: [{ id: crypto.randomUUID(), hours: '' }], description: '', submittedAt: null },
+        [issue.key]: {
+          ...(current.drafts[issue.key] || { issue, entries: [{ id: crypto.randomUUID(), hours: '' }], description: '', submittedAt: null }),
+          source: 'own',
+        },
       },
     }));
   }
