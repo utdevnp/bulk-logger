@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Jira Timekeeper",
+  "description": "Log your day across Jira issues in one focused workflow.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "116",
+  "action": {
+    "default_title": "Open Jira Timekeeper"
+  },
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "permissions": ["storage", "sidePanel", "alarms"],
+  "optional_host_permissions": ["https://*/*"]
+}
