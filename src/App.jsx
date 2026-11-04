@@ -517,7 +517,6 @@ function App() {
   const overCap = totalMinutes > capMinutes;
   const connected = Boolean(appState.credentials);
   const pendingCount = activeIssues.filter((issue) => (remainingMinutesPerIssue[issue.key] || 0) > 0).length;
-  const hiddenRecentCount = Object.keys(appState.drafts).filter((key) => !(appState.myOwnIssueKeys || []).includes(key)).length;
   const logsComplete = worklogsLoaded && todayWorklogs.totalMinutes >= capMinutes;
   const wellDone = logsComplete || completionDay === todayKey();
 
@@ -957,18 +956,8 @@ function App() {
 
               {busy && issues.length === 0 && activeIssues.length === 0 ? (
                 <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-4 text-[12px] text-slate-500"><LoaderCircle size={15} className="animate-spin text-violet-600" /> Loading your Jira issues…</div>
-              ) : activeIssues.length === 0 && issues.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-slate-300 bg-white/60 px-4 py-6 text-center">
-                  <p className="text-[12px] font-medium text-slate-700">No assigned tickets updated today</p>
-                  <p className="mt-1 text-[11px] leading-4 text-slate-400">Open Manage to refresh today’s ticket updates or search your assigned tickets.</p>
-                </div>
               ) : activeIssues.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-slate-300 bg-white/60 px-4 py-7 text-center">
-                  <div className="mx-auto mb-2 grid size-9 place-items-center rounded-xl bg-violet-50 text-violet-700"><ListPlus size={17} /></div>
-                  <p className="text-[12px] font-semibold text-slate-700">Choose tickets for today</p>
-                  <p className="mt-1 text-[11px] leading-4 text-slate-400">{appState.showRecentTickets === false && hiddenRecentCount > 0 ? 'Recent tickets are hidden. Turn them on to see your selected tickets.' : 'Pick tickets from your updates or assigned work to add time.'}</p>
-                  <button onClick={() => hiddenRecentCount > 0 && appState.showRecentTickets === false ? setAppState((current) => ({ ...current, showRecentTickets: true })) : openIssuePicker()} className="mt-3 rounded-lg bg-violet-700 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-violet-800">{hiddenRecentCount > 0 && appState.showRecentTickets === false ? 'Show recent tickets' : 'Select tickets'}</button>
-                </div>
+                <div className="min-h-0" aria-live="polite" />
               ) : (
                 <div className="flex flex-col gap-1.5">
                   {activeIssues.map((issue) => {
