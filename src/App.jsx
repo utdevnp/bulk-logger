@@ -1022,14 +1022,14 @@ function App() {
               <div className="mt-2 flex items-center justify-center gap-1.5 text-[10px] text-slate-400"><ShieldCheck size={12} className="text-emerald-600" /> Your Jira credentials stay in this Chrome profile.</div>
             </footer>
           </section>
-          {showIssuePicker && <IssuePicker issues={issues} drafts={appState.drafts} loggedByIssue={todayWorklogs.byIssue} busy={busy} recentError={pageError} onRefreshRecent={() => loadIssues()} onSearchRecentIssues={(query) => getRecentIssues(appState.credentials, query)} onSearchMyIssues={(query) => searchMyOwnIssues(appState.credentials, query)} onToggle={(issue) => appState.drafts[issue.key] ? removeIssue(issue.key) : selectIssue(issue)} onClose={() => setShowIssuePicker(false)} />}
+          {showIssuePicker && <IssuePicker issues={issues} drafts={appState.drafts} ownIssueKeys={appState.myOwnIssueKeys || []} loggedByIssue={todayWorklogs.byIssue} busy={busy} recentError={pageError} onRefreshRecent={() => loadIssues()} onSearchRecentIssues={(query) => getRecentIssues(appState.credentials, query)} onSearchMyIssues={(query) => searchMyOwnIssues(appState.credentials, query)} onToggle={toggleIssue} onClose={() => setShowIssuePicker(false)} />}
         </>
       )}
     </main>
   );
 }
 
-function IssuePicker({ issues, drafts, loggedByIssue, busy, recentError, onRefreshRecent, onSearchRecentIssues, onSearchMyIssues, onToggle, onClose }) {
+function IssuePicker({ issues, drafts, ownIssueKeys = [], loggedByIssue, busy, recentError, onRefreshRecent, onSearchRecentIssues, onSearchMyIssues, onToggle, onClose }) {
   const [mode, setMode] = useState('recent');
   const [query, setQuery] = useState('');
   const [ownIssues, setOwnIssues] = useState([]);
