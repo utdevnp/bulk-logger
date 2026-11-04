@@ -377,13 +377,6 @@ function App() {
     if (hydrated) writeStorage(STORE_KEY, appState);
   }, [appState, hydrated]);
 
-  useEffect(() => {
-    if (!hydrated || !worklogsLoaded || todayWorklogs.totalMinutes < capMinutes) return;
-    const day = todayKey();
-    setCompletionDay(day);
-    writeStorage(COMPLETION_KEY, day);
-  }, [hydrated, worklogsLoaded, todayWorklogs.totalMinutes, capMinutes]);
-
   const minutesPerIssue = useMemo(() => Object.fromEntries(
     Object.entries(appState.drafts).map(([key, draft]) => [
       key,
@@ -402,6 +395,13 @@ function App() {
   const pendingCount = activeIssues.filter((issue) => (minutesPerIssue[issue.key] || 0) > 0).length;
   const logsComplete = worklogsLoaded && todayWorklogs.totalMinutes >= capMinutes;
   const wellDone = logsComplete || completionDay === todayKey();
+
+  useEffect(() => {
+    if (!hydrated || !worklogsLoaded || todayWorklogs.totalMinutes < capMinutes) return;
+    const day = todayKey();
+    setCompletionDay(day);
+    writeStorage(COMPLETION_KEY, day);
+  }, [hydrated, worklogsLoaded, todayWorklogs.totalMinutes, capMinutes]);
 
   async function authorizeSite(site) {
     if (!globalThis.chrome?.permissions?.request) return true;
